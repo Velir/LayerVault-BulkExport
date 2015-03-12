@@ -1,0 +1,25 @@
+{
+  "name": "LayerVault-BulkExport",
+  "version": "0.0.1",
+  "description": "Bulk export LayerVault assets",
+  "main": "export.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Velir/LayerVault-BulkExport.git"
+  },
+  "keywords": [
+    "LayerVault"
+  ],
+  "author": "Joel Douglass",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Velir/LayerVault-BulkExport/issues"
+  },
+  "homepage": "https://github.com/Velir/LayerVault-BulkExport",
+  "devDependencies": {
+    "simple-oauth2": "^0.2.1"
+  }
+}
