@@ -161,7 +161,9 @@ authenticate(args[0], args[1], args[2], args[3])
 
         var level = {
           nodes: _.indexBy(data, 'id'),
-          folderName: function(n){ return 'preview -' + n.name; },
+          folderName: function(n){
+            return 'preview - ' + n.page_number + (n.name ? ' - ' + n.name : ''); 
+          },
           key: 'previews',
           postProcessNode: function(n, p){
 
