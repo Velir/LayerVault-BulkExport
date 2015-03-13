@@ -224,6 +224,15 @@ authenticate(args[0], args[1], args[2], args[3])
 
         treeObjects[level.key] = level;
 
+        return fetchUsers(token, _.values(level.nodes));
+      })
+      // Users
+      .then(function(data){
+
+        treeObjects["users"] = {
+          nodes: _.indexBy(data, 'id')
+        };
+
         postProcess(treeObjects);
       })
       .catch(handleError);
@@ -293,9 +302,22 @@ function processNode(level, node, startPath){
     }
 }
 
+/**
+ * Writes a feedback line to the file (recursive)
+ * @param feedbackNode The feedback item
+ * @param filePath     The file path
+ * @param index        The feedback item index
+ * @param depth        The feedback depth
+ */
 function writeFeedback(feedbackNode, filePath, index, depth){
 
-  var comment = Array(depth + 1).join('  ') + (index + 1) + '. ' + feedbackNode.message + '\n';
+  var user = treeObjects['users'].nodes[feedbackNode.links.user];
+
+  var comment =
+    Array(depth + 1).join('  ') + (index + 1) + '. ' +
+    '**' + user.first_name + " " + user.last_name + ' (' + user.email + ')**: ' +
+    '*' + feedbackNode.created_at + '* - ' +
+    feedbackNode.message + '\n';
 
   console.log(filePath, comment);
 
@@ -344,9 +366,9 @@ function fetchNextLevel(token, currentLevelNodes, childLevelKey, childKeyAlias){
 
   var chunkPromises = _.chunk(allChildren, maxIdsPerRequest).map(function(ids){
     var childIds = ids.join(',');
-    console.log("Fetching " + childLevelKey + ": " + ids);
+    console.log("Fetching " + childLevelKey + ": " + childIds);
 
-    return get(token, childLevelKey + '/${ids}', {'ids': ids});
+    return get(token, childLevelKey + '/${ids}', {'ids': childIds});
   });
 
   Q.all(chunkPromises).then(function(results){
@@ -360,6 +382,46 @@ function fetchNextLevel(token, currentLevelNodes, childLevelKey, childKeyAlias){
       .then(function(data){
         deferred.resolve(flattened.concat(data));
       });
+  })
+  .catch(handleError);
+
+  return deferred.promise;
+}
+
+/**
+* Fetches the user data from the API
+* @param token                 The oauth2 token
+* @param feedbackNodes         The feedback nodes
+* @return                      A promise of the user API objects
+*/
+function fetchUsers(token, feedbackNodes){
+
+  var deferred = Q.defer();
+
+  var allUserIds = _.uniq(feedbackNodes.map(function(n){
+    return n.links.user;
+  }));
+
+  // If there are no children, return an empty array
+  if(!allUserIds || allUserIds.length === 0){
+    deferred.resolve([]);
+    return deferred.promise;
+  }
+
+  var chunkPromises = _.chunk(allUserIds, maxIdsPerRequest).map(function(ids){
+    var userIds = ids.join(',');
+    console.log("Fetching Users: " + userIds);
+
+    return get(token, 'users/${ids}', {'ids': userIds});
+  });
+
+  Q.all(chunkPromises).then(function(results){
+
+    var flattened = _.flatten(results.map(function(r){
+      return r.users;
+    }));
+
+    deferred.resolve(flattened);
   })
   .catch(handleError);
 
