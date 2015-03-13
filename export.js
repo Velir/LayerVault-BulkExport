@@ -319,8 +319,6 @@ function writeFeedback(feedbackNode, filePath, index, depth){
     '*' + feedbackNode.created_at + '* - ' +
     feedbackNode.message + '\n';
 
-  console.log(filePath, comment);
-
   fs.appendFile(filePath, comment);
 
   feedbackNode.links.replies.forEach(function(r, i){
