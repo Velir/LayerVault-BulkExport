@@ -12,202 +12,277 @@ var apiHost = 'api.layervault.com',
     mkdirp = require('mkdirp'),
     _ = require('lodash'),
     strftime = require('strftime'),
-    request = require('request');
+    request = require('request'),
+    folderName = strftime('%Y%m%d-%H%M%S'),
+    startFolder = 'out/' + folderName,
+    maxIdsPerRequest = 200;
 
 if(args.length < 4){
   console.log('You forgot to include your LayerVault Username, password, Client ID and Secret');
   process.exit(1);
 }
 
-var folderName = strftime('%Y%m%d-%H%M%S'),
-    outputFolder = './out/' + folderName;
+var treeObjects = {};
 
-mkdirp(outputFolder);
+authenticate(args[0], args[1], args[2], args[3])
+  .then(function(token){
 
-var oauth2 = require('simple-oauth2')({
-  clientID: args[2],
-  clientSecret: args[3],
-  site: 'https://' + apiHost,
-  tokenPath: '/oauth/token'
-});
+    // ***
+    // Start fetchin'
+    // Start with the "me" call and read all levels of data into memory
+    // This will allow us to get away with only a handful of API calls and should keep us
+    // under the limit.
+    // ***
+    console.log("Starting fetch");
+    get(token, 'me')
+      // Users
+      .then(function(data){
 
-// Get the access token object for the client
-oauth2.password.getToken({
-  username: args[0],
-  password: args[1]
-}, success);
+        var level = {
+          nodes: _.indexBy(data.users, 'id'),
+          getChildren: function(n){ return n.links.organizations; }
+        };
 
-// When the access token is returned, we're off
-function success(error, result) {
-  if (error) {
-    console.log('Access Token Error', error.message);
-    process.exit(1);
-  }
+        return fetchNextLevel(token, level, 'organizations');
+      })
+      // Organizations
+      .then(function(data){
 
-  token = oauth2.accessToken.create(result);
+        var level = {
+          nodes: _.indexBy(data, 'id'),
+          folderName: function(n){ return n.name; },
+          childrenKey: 'projects',
+          getChildren: function(n){ return n.links.projects; }
+        };
 
-  // ***
-  // Helper function to access api methods
-  // ***
-  function get(method, path, parameters){
+        treeObjects['organizations'] = level;
 
-    var deferred = Q.defer();
+        return fetchNextLevel(token, level, 'projects');
+      })
+      // Projects
+      .then(function(data){
 
-    var headers = {
-      'Authorization': 'Bearer ' + token.token['access_token']
-    };
+        var level = {
+          nodes: _.indexBy(data, 'id'),
+          folderName: function(n){ return n.name; },
+          childrenKey: 'folders',
+          getChildren: function(n){ return n.links.folders; }
+        };
 
-    apiClient.get('https://' + apiHost + '/api/v2/' + method,
-      {
-        headers: headers,
-        path: path,
-        parameters: parameters
-      }, function(data, response){
+        treeObjects['projects'] = level;
 
-        if(response.statusCode != 200){
-          console.log("Error: " + response.statusCode + " on method: " + method);
-          deferred.reject();
-        }
+        return fetchNextLevel(token, level, 'folders');
+      })
+      // Folders
+      .then(function(data){
 
-        if(!data){
-          console.log("Error: Empty data response on method: " + method);
-          deferred.reject();
-        }
+        var level = {
+          nodes: _.indexBy(data, 'id'),
+          folderName: function(n){ return n.name; },
+          childrenKey: 'files',
+          getChildren: function(n){ return n.links.files; }
+        };
 
-        var obj = JSON.parse(data);
+        treeObjects['folders'] = level;
 
-        deferred.resolve(obj);
-    });
+        return fetchNextLevel(token, level, 'files');
+      })
+      // Files
+      .then(function(data){
 
-    return deferred.promise;
-  }
+        var level = {
+          nodes: _.indexBy(data, 'id'),
+          folderName: function(n){ return n.slug; },
+          childrenKey: 'revision_clusters',
+          getChildren: function(n){ return n.links.revision_clusters; }
+        };
 
-  // Start fetchin'
+        treeObjects['files'] = level;
 
-  get('me')
-    .then(function(meData){
-      var organizations = meData.users[0].links.organizations;
-      return get('organizations/${ids}', {"ids": organizations.join(',')});
-    })
-    .then(function(orgData){
+        return fetchNextLevel(token, level, 'revision_clusters');
+      })
+      // Revision Clusters
+      .then(function(data){
 
-      return orgData.organizations.map(function(organization){
+        var level = {
+          nodes: _.indexBy(data, 'id'),
+          folderName: function(n){ return 'cluster-' + n.cluster_number; },
+          childrenKey: 'revisions',
+          getChildren: function(n){ return n.links.revisions; }
+        };
 
-        var orgFolder = outputFolder + '/' + organization.name;
-        mkdirp(orgFolder);
-        fs.writeFile(orgFolder + '/meta.json', JSON.stringify(organization, null, 2));
+        treeObjects['revision_clusters'] = level;
 
-        var projects = organization.links.projects;
+        return fetchNextLevel(token, level, 'revisions');
+      })
+      // Revisions
+      .then(function(data){
 
-        return get('projects/${ids}', {"ids": projects.join(',')})
-          .then(function(projData){
-
-            return projData.projects.map(function(project){
-
-              var projFolder = orgFolder + '/' + project.name;
-              mkdirp(projFolder);
-              fs.writeFile(projFolder + '/meta.json', JSON.stringify(project, null, 2));
-
-              var folders = project.links.folders;
-
-              return get('folders/${ids}', {"ids": folders.join(',')})
-                .then(function(folderData){
-                  return folderData.folders.map(function(folder){
-
-                    var folderFolder = projFolder + '/' + folder.name;
-                    mkdirp(folderFolder);
-                    fs.writeFile(folderFolder + '/meta.json', JSON.stringify(folder, null, 2));
-
-                    var files = folder.links.files;
-
-                    return get('files/${ids}', {"ids": files.join(',')})
-                      .then(function(fileData){
-                        return fileData.files.map(function(file){
-
-                          var fileFolder = folderFolder + '/' + file.slug;
-                          mkdirp(fileFolder);
-                          fs.writeFile(fileFolder + '/meta.json', JSON.stringify(file, null, 2));
-
-                          var revisionClusters = file.links["revision_clusters"];
-
-                          return get('revision_clusters/${ids}', {"ids": revisionClusters.join(',')})
-                            .then(function(rcData){
-
-                              return rcData["revision_clusters"].map(function(revisionCluster){
-
-                                var rcFolder = fileFolder + '/cluster-' + revisionCluster.cluster_number;
-                                mkdirp(rcFolder);
-                                fs.writeFile(rcFolder + '/meta.json', JSON.stringify(revisionCluster, null, 2));
-
-                                var revisions = revisionCluster.links.revisions;
-
-                                return get('revisions/${ids}', {"ids": revisions.join(',')})
-                                  .then(function(revisionData){
-
-                                    return revisionData.revisions.map(function(revision){
-
-                                      var revisionFolder = rcFolder + '/revision-' + revision.revision_number;
-                                      mkdirp(revisionFolder);
-                                      fs.writeFile(revisionFolder + '/meta.json', JSON.stringify(revision, null, 2));
-
-                                      // *** download the file here!
-                                      var r = request(revision["download_url"]);
-                                      r.on('response',  function (res) {
-                                        if(res.headers['status'] === '404 Not Found'){
-                                          console.log("Not Found: " + revision["download_url"]);
-                                          return;
-                                        }
-                                        var fileName = getFileNameFromHeader(res);
-                                        res.pipe(fs.createWriteStream(revisionFolder + '/' + fileName));
-                                      });
-
-                                      // var previews = revision.links.previews;
-                                      //
-                                      // return get('previews/${ids}', {"ids": previews.join(',')})
-                                      // .then(function(previewData){
-                                      //
-                                      //   return previewData.previews.map(function(preview){
-                                      //
-                                      //     var previewFolder = revisionFolder + '/' + preview.name;
-                                      //     mkdirp(previewFolder);
-                                      //     fs.writeFile(previewFolder + '/meta.json', JSON.stringify(preview, null, 2));
-                                      //
-                                      //     var feedbackItems = revision.links["feedback_items"];
-                                      //
-                                      //     var feedbackCompiled = "";
-                                      //
-                                      //     var feedbackPromises = get('feedback_items/${ids}', {"ids": feedbackItems.join(',')})
-                                      //     .then(function(feedbackData){
-                                      //
-                                      //
-                                      //
-                                      //
-                                      //     });
-                                      //
-                                      //     return feedbackPromises;
-                                      //   });
-                                      //
-                                      // });
-                                    });
-
-                                  });
-                              });
-                            });
-                       });
-                    });
-                  });
-              });
+        var level = {
+          nodes: _.indexBy(data, 'id'),
+          folderName: function(n){ return 'revision-' + n.revision_number; },
+          postProcessNode: function(n, p){
+            // *** download the file here!
+            console.log('Fetching: ' + n["download_url"]);
+            var requestOptions = {
+              url: n["download_url"],
+              headers: {
+                'Authorization': 'Bearer ' + token.token['access_token']
+              }
+            };
+            var r = request(requestOptions);
+            r.on('response',  function (res) {
+              if(res.headers['status'] === '404 Not Found'){
+                console.log("Not Found: " + n["download_url"]);
+                return;
+              }
+              var fileName = getFileNameFromHeader(res);
+              console.log('Writing: ' + fileName);
+              res.pipe(fs.createWriteStream(p + '/' + fileName));
             });
-          });
-      });
-    })
-    .catch(function(error){
-      console.log(error);
-    });
+          }
+        };
 
+        treeObjects['revisions'] = level;
+
+        postProcess(treeObjects);
+      })
+      .catch(handleError);
+  })
+  .catch(handleError);
+
+function postProcess(treeObjects){
+  console.log('Starting post process');
+
+  mkdirp.sync('out');
+  mkdirp.sync(startFolder);
+
+  // Depth first tree traversal
+  _.values(treeObjects['organizations'].nodes).forEach(function(node){
+    processNode(treeObjects['organizations'], node, startFolder);
+  });
+}
+
+function processNode(level, node, startPath){
+
+    var path = startPath + '/' + level.folderName(node);
+    mkdirp.sync(path);
+    fs.writeFileSync(path + '/meta.json', JSON.stringify(node, null, 2));
+
+    // If there is a special node process call back
+    if(level.postProcessNode){
+      level.postProcessNode(node, path);
+    }
+
+    // If has children, process them recursively
+    if(level.childrenKey){
+      level.getChildren(node).forEach(function(child){
+        processNode(treeObjects[level.childrenKey], treeObjects[level.childrenKey].nodes[child], path);
+      });
+    }
+}
+
+function fetchNextLevel(token, currentLevel, childApiMethod){
+
+  var deferred = Q.defer();
+
+  var allChildren = _.flatten(_.values(currentLevel.nodes).map(currentLevel.getChildren));
+
+  var chunkPromises = _.chunk(allChildren, maxIdsPerRequest).map(function(ids){
+    var childIds = ids.join(',');
+    console.log("Fetching " + childApiMethod + ": " + ids);
+
+    return get(token, childApiMethod + '/${ids}', {'ids': ids});
+  });
+
+  Q.all(chunkPromises).then(function(results){
+
+    var flattened = _.flatten(results.map(function(r){
+      return r[childApiMethod];
+    }));
+
+    deferred.resolve(flattened);
+  })
+  .catch(handleError);
+
+  return deferred.promise;
+}
+
+// ***
+// Helper function to access api methods
+// ***
+function get(token, method, path, parameters){
+
+  var deferred = Q.defer();
+
+  var headers = {
+    'Authorization': 'Bearer ' + token.token['access_token']
+  };
+
+  apiClient.get('https://' + apiHost + '/api/v2/' + method,
+  {
+    headers: headers,
+    path: path,
+    parameters: parameters
+  }, function(data, response){
+
+    if(response.statusCode != 200){
+      console.log("Error: " + response.statusCode + " on method: " + method);
+      deferred.reject();
+    }
+
+    if(!data){
+      console.log("Error: Empty data response on method: " + method);
+      deferred.reject();
+    }
+
+    var obj = JSON.parse(data);
+
+    deferred.resolve(obj);
+  });
+
+  return deferred.promise;
+}
+
+function authenticate(user, password, clientId, clientSecret){
+
+  var deferred = Q.defer();
+
+  var oauth2 = require('simple-oauth2')({
+    clientID: clientId,
+    clientSecret: clientSecret,
+    site: 'https://' + apiHost,
+    tokenPath: '/oauth/token'
+  });
+
+  // Get the access token object for the client
+  oauth2.password.getToken({ username: user, password: password}, authenticated);
+
+  function authenticated(error, result) {
+    if (error) {
+      console.log('Access Token Error', error.message);
+      deferred.reject(error);
+    }
+
+    // Set token for use elsewhere in the app
+    token = oauth2.accessToken.create(result);
+    deferred.resolve(token);
+  }
+
+  return deferred.promise;
+}
+
+function handleError(error){
+  console.log(error);
 }
 
 function getFileNameFromHeader(response){
   var regexp = /.*?\'\'(.*)/i;
-  return regexp.exec( response.headers['content-disposition'] )[1];
+
+  var match = regexp.exec( response.headers['content-disposition'] );
+  if(!match || match.length < 2){
+    console.log(response.headers);
+    return "fileWithUnknownName";
+  }
+  return match[1];
 }
