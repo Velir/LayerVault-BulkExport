@@ -139,7 +139,7 @@ authenticate(args[0], args[1], args[2], args[3])
           childrenKey: 'previews',
           createNewFolder: true,
           postProcessNode: function(n, p){
-            return;
+
             // *** download the file here!
             var requestOptions = {
               url: n["download_url"],
@@ -188,7 +188,6 @@ authenticate(args[0], args[1], args[2], args[3])
               });
             }
 
-            return;
             // *** download the preview here!
             var requestOptions = {
               url: n["url"],
