@@ -48,7 +48,8 @@ authenticate(args[0], args[1], args[2], args[3])
         var level = {
           nodes: _.indexBy(data.users, 'id'),
           key: 'users',
-          childrenKey: 'organizations'
+          childrenKey: 'organizations',
+          createNewFolder: true
         };
 
         return fetchNextLevel(token, _.values(level.nodes), level.childrenKey);
@@ -60,7 +61,8 @@ authenticate(args[0], args[1], args[2], args[3])
           nodes: _.indexBy(data, 'id'),
           folderName: function(n){ return n.name; },
           key: 'organizations',
-          childrenKey: 'projects'
+          childrenKey: 'projects',
+          createNewFolder: true
         };
 
         treeObjects[level.key] = level;
@@ -74,7 +76,8 @@ authenticate(args[0], args[1], args[2], args[3])
           nodes: _.indexBy(data, 'id'),
           folderName: function(n){ return n.name; },
           key: 'projects',
-          childrenKey: 'folders'
+          childrenKey: 'folders',
+          createNewFolder: true
         };
 
         treeObjects[level.key] = level;
@@ -88,7 +91,8 @@ authenticate(args[0], args[1], args[2], args[3])
           nodes: _.indexBy(data, 'id'),
           folderName: function(n){ return n.name; },
           key: 'folders',
-          childrenKey: 'files'
+          childrenKey: 'files',
+          createNewFolder: true
         };
 
         treeObjects[level.key] = level;
@@ -102,7 +106,8 @@ authenticate(args[0], args[1], args[2], args[3])
           nodes: _.indexBy(data, 'id'),
           folderName: function(n){ return n.slug; },
           key: 'files',
-          childrenKey: 'revision_clusters'
+          childrenKey: 'revision_clusters',
+          createNewFolder: true
         };
 
         treeObjects[level.key] = level;
@@ -116,7 +121,8 @@ authenticate(args[0], args[1], args[2], args[3])
           nodes: _.indexBy(data, 'id'),
           folderName: function(n){ return 'cluster-' + n.cluster_number; },
           key: 'revision_clusters',
-          childrenKey: 'revisions'
+          childrenKey: 'revisions',
+          createNewFolder: true
         };
 
         treeObjects[level.key] = level;
@@ -131,8 +137,9 @@ authenticate(args[0], args[1], args[2], args[3])
           folderName: function(n){ return 'revision-' + n.revision_number; },
           key: 'revisions',
           childrenKey: 'previews',
+          createNewFolder: true,
           postProcessNode: function(n, p){
-
+            return;
             // *** download the file here!
             var requestOptions = {
               url: n["download_url"],
@@ -162,11 +169,26 @@ authenticate(args[0], args[1], args[2], args[3])
         var level = {
           nodes: _.indexBy(data, 'id'),
           folderName: function(n){
-            return 'preview - ' + n.page_number + (n.name ? ' - ' + n.name : ''); 
+            return 'preview - ' + n.page_number + (n.name ? ' - ' + n.name : '');
           },
           key: 'previews',
+          childrenKey: 'feedback_items',
+          createNewFolder: true,
           postProcessNode: function(n, p){
 
+            // Handle Feedback
+            if(n.links.feedback_items && n.links.feedback_items.length > 0){
+              var commentPath = p + "/comments.md";
+
+              n.links.feedback_items.forEach(function(nodeId, i){
+
+                if(treeObjects["feedback_items"].nodes[nodeId]){
+                  writeFeedback(treeObjects["feedback_items"].nodes[nodeId], commentPath, i, 0);
+                }
+              });
+            }
+
+            return;
             // *** download the preview here!
             var requestOptions = {
               url: n["url"],
@@ -185,6 +207,19 @@ authenticate(args[0], args[1], args[2], args[3])
               res.pipe(fs.createWriteStream(p + '/' + fileName));
             });
           }
+        };
+
+        treeObjects[level.key] = level;
+
+        return fetchNextLevel(token, _.values(level.nodes), level.childrenKey, 'replies');
+      })
+      // Feedback
+      .then(function(data){
+
+        var level = {
+          nodes: _.indexBy(data, 'id'),
+          createNewFolder: false,
+          key: 'feedback_items'
         };
 
         treeObjects[level.key] = level;
@@ -223,9 +258,16 @@ function postProcess(treeObjects){
  */
 function processNode(level, node, startPath){
 
-    var path = startPath + '/' + level.folderName(node);
-    mkdirp.sync(path);
-    fs.writeFileSync(path + '/meta.json', JSON.stringify(node, null, 2));
+    var path;
+
+    if(level.createNewFolder){
+      path = startPath + '/' + level.folderName(node);
+      mkdirp.sync(path);
+      fs.writeFileSync(path + '/meta.json', JSON.stringify(node, null, 2));
+    }
+    else{
+      path = startPath;
+    }
 
     // If there is a special node process call back
     if(level.postProcessNode){
@@ -251,19 +293,40 @@ function processNode(level, node, startPath){
     }
 }
 
+function writeFeedback(feedbackNode, filePath, index, depth){
+
+  var comment = Array(depth + 1).join('  ') + (index + 1) + '. ' + feedbackNode.message + '\n';
+
+  console.log(filePath, comment);
+
+  fs.appendFile(filePath, comment);
+
+  feedbackNode.links.replies.forEach(function(r, i){
+    if(treeObjects["feedback_items"].nodes[r]){
+      writeFeedback(treeObjects["feedback_items"].nodes[r], filePath, i, depth + 1);
+    }
+  });
+}
+
 /**
  * Fetches the next level of data in the hierarchy from the API
- * @param token               The oauth2 token
- * @param currentLevelNodes   The current level nodes
- * @param childLevelKey       The key for the child level
- * @return                    A promise of the next level API objects
+ * @param token                     The oauth2 token
+ * @param currentLevelNodes         The current level nodes
+ * @param childLevelKey             The key for the child level
+ * @param childKeyAlias             Alternative key to check on the links object
+ * @return                          A promise of the next level API objects
  */
-function fetchNextLevel(token, currentLevelNodes, childLevelKey){
+function fetchNextLevel(token, currentLevelNodes, childLevelKey, childKeyAlias){
 
   var deferred = Q.defer();
 
   var allChildren = _.flatten(currentLevelNodes.map(function(n){
-    return n.links[childLevelKey];
+    if(_.has(n.links, childLevelKey)){
+      return n.links[childLevelKey];
+    }
+    else{
+      return n.links[childKeyAlias];
+    }
   })).filter(function(child){
     return child;
   });
@@ -293,7 +356,7 @@ function fetchNextLevel(token, currentLevelNodes, childLevelKey){
     }));
 
     // Recursively fetch more levels of this type of node as needed (for folders, etc.)
-    fetchNextLevel(token, flattened, childLevelKey)
+    fetchNextLevel(token, flattened, childLevelKey, childKeyAlias)
       .then(function(data){
         deferred.resolve(flattened.concat(data));
       });
