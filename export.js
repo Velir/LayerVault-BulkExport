@@ -14,11 +14,16 @@ var apiHost = 'api.layervault.com',
     request = require('request'),
     folderName = strftime('%Y%m%d-%H%M%S'),
     startFolder = 'out/' + folderName,
-    maxIdsPerRequest = 200;
+    maxIdsPerRequest = 400,
+    testingLimit;
 
 if(args.length < 4){
   console.log('You forgot to include your LayerVault Username, password, Client ID and Secret');
   process.exit(1);
+}
+
+if(args.length > 4){
+  testingLimit = +args[4];
 }
 
 var treeObjects = {};
@@ -125,10 +130,10 @@ authenticate(args[0], args[1], args[2], args[3])
           nodes: _.indexBy(data, 'id'),
           folderName: function(n){ return 'revision-' + n.revision_number; },
           key: 'revisions',
+          childrenKey: 'previews',
           postProcessNode: function(n, p){
 
             // *** download the file here!
-            console.log('Fetching: ' + n["download_url"]);
             var requestOptions = {
               url: n["download_url"],
               headers: {
@@ -142,7 +147,39 @@ authenticate(args[0], args[1], args[2], args[3])
                 return;
               }
               var fileName = getFileNameFromHeader(res);
-              console.log('Writing: ' + fileName);
+              res.pipe(fs.createWriteStream(p + '/' + fileName));
+            });
+          }
+        };
+
+        treeObjects[level.key] = level;
+
+        return fetchNextLevel(token, _.values(level.nodes), level.childrenKey);
+      })
+      // Previews
+      .then(function(data){
+
+        var level = {
+          nodes: _.indexBy(data, 'id'),
+          folderName: function(n){ return 'preview -' + n.name; },
+          key: 'previews',
+          postProcessNode: function(n, p){
+
+            // *** download the preview here!
+            var requestOptions = {
+              url: n["url"],
+              headers: {
+                'Authorization': 'Bearer ' + token.token['access_token']
+              }
+            };
+
+            var r = request(requestOptions);
+            r.on('response',  function (res) {
+              if(res.headers['status'] === '404 Not Found'){
+                console.log("Not Found: " + n["url"]);
+                return;
+              }
+              var fileName = "preview.png";
               res.pipe(fs.createWriteStream(p + '/' + fileName));
             });
           }
@@ -190,20 +227,24 @@ function processNode(level, node, startPath){
 
     // If there is a special node process call back
     if(level.postProcessNode){
-      //level.postProcessNode(node, path);
+      level.postProcessNode(node, path);
     }
 
     // Process children of same name (i.e. folders)
     if(level.key && node.links[level.key]){
       node.links[level.key].forEach(function(child){
-        processNode(treeObjects[level.key], treeObjects[level.key].nodes[child], path);
+        if(treeObjects[level.key].nodes[child]){
+          processNode(treeObjects[level.key], treeObjects[level.key].nodes[child], path);
+        }
       });
     }
 
     // If has children, process them recursively
     if(level.childrenKey && node.links[level.childrenKey]){
       node.links[level.childrenKey].forEach(function(child){
-        processNode(treeObjects[level.childrenKey], treeObjects[level.childrenKey].nodes[child], path);
+        if(treeObjects[level.childrenKey].nodes[child]){
+          processNode(treeObjects[level.childrenKey], treeObjects[level.childrenKey].nodes[child], path);
+        }
       });
     }
 }
@@ -229,6 +270,11 @@ function fetchNextLevel(token, currentLevelNodes, childLevelKey){
   if(!allChildren || allChildren.length === 0){
     deferred.resolve([]);
     return deferred.promise;
+  }
+
+  // If we want to limit the number of requests for testing purposes
+  if(testingLimit){
+    allChildren = allChildren.slice(0, testingLimit);
   }
 
   var chunkPromises = _.chunk(allChildren, maxIdsPerRequest).map(function(ids){
