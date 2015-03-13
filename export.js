@@ -272,7 +272,7 @@ function get(token, method, path){
 }
 
 /**
- * Helper function to access api methods
+ * Authenticate the user
  * @param  user         The user name
  * @param  password     The password
  * @param  clientId     The client_id token
