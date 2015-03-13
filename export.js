@@ -4,7 +4,6 @@ var apiHost = 'api.layervault.com',
     Client = require('node-rest-client').Client,
     apiClient = new Client(),
     args = process.argv.slice(2),
-    http = require('http'),
     token,
     Q = require('q'),
     fs = require('fs'),
@@ -24,15 +23,18 @@ if(args.length < 4){
 
 var treeObjects = {};
 
+/**
+ * First authenticate
+ */
 authenticate(args[0], args[1], args[2], args[3])
   .then(function(token){
 
-    // ***
-    // Start fetchin'
-    // Start with the "me" call and read all levels of data into memory
-    // This will allow us to get away with only a handful of API calls and should keep us
-    // under the limit.
-    // ***
+    /**
+     * Start fetchin'
+     * Start with the "me" call and read all levels of data into memory
+     * This will allow us to get away with only a handful of API calls and should keep us
+     * under the limit.
+     */
     console.log("Starting fetch");
     get(token, 'me')
       // Users
@@ -122,6 +124,7 @@ authenticate(args[0], args[1], args[2], args[3])
           nodes: _.indexBy(data, 'id'),
           folderName: function(n){ return 'revision-' + n.revision_number; },
           postProcessNode: function(n, p){
+
             // *** download the file here!
             console.log('Fetching: ' + n["download_url"]);
             var requestOptions = {
@@ -151,6 +154,11 @@ authenticate(args[0], args[1], args[2], args[3])
   })
   .catch(handleError);
 
+/**
+ * Starts post processing of nodes. Should be called after all
+ * node levels are loaded from the API
+ * @param treeObjects All of the tree objects fetched from the API keyed by type
+ */
 function postProcess(treeObjects){
   console.log('Starting post process');
 
@@ -163,6 +171,15 @@ function postProcess(treeObjects){
   });
 }
 
+/**
+ * Recursive method for processing each node in the tree
+ * Folders are created on disk and the contents of the node are written to the folder
+ * The node tree is traversed depth first
+ *
+ * @param level     The current level object
+ * @param node      The node to process
+ * @param startPath The current file path on disk for writing data
+ */
 function processNode(level, node, startPath){
 
     var path = startPath + '/' + level.folderName(node);
@@ -182,6 +199,13 @@ function processNode(level, node, startPath){
     }
 }
 
+/**
+ * Fetches the next level of data in the hierarchy from the API
+ * @param token          The oauth2 token
+ * @param currentLevel   The current level object
+ * @param childApiMethod The api method for the child level
+ * @return               A promise of the next level API objects
+ */
 function fetchNextLevel(token, currentLevel, childApiMethod){
 
   var deferred = Q.defer();
@@ -208,10 +232,14 @@ function fetchNextLevel(token, currentLevel, childApiMethod){
   return deferred.promise;
 }
 
-// ***
-// Helper function to access api methods
-// ***
-function get(token, method, path, parameters){
+/**
+ * Helper function to access api methods
+ * @param  token      The oauth2 token
+ * @param  method     The API method
+ * @param  path       The path parameters (usually just {'ids': ...})
+ * @return            A promise of the API response as an object
+ */
+function get(token, method, path){
 
   var deferred = Q.defer();
 
@@ -222,8 +250,7 @@ function get(token, method, path, parameters){
   apiClient.get('https://' + apiHost + '/api/v2/' + method,
   {
     headers: headers,
-    path: path,
-    parameters: parameters
+    path: path
   }, function(data, response){
 
     if(response.statusCode != 200){
@@ -244,6 +271,14 @@ function get(token, method, path, parameters){
   return deferred.promise;
 }
 
+/**
+ * Helper function to access api methods
+ * @param  user         The user name
+ * @param  password     The password
+ * @param  clientId     The client_id token
+ * @param  clientSecret The client_secret token
+ * @return              A promise of the oauth2 token
+ */
 function authenticate(user, password, clientId, clientSecret){
 
   var deferred = Q.defer();
@@ -272,10 +307,18 @@ function authenticate(user, password, clientId, clientSecret){
   return deferred.promise;
 }
 
+/**
+ * Generic deferred error handler
+ * @param error The error opject
+ */
 function handleError(error){
   console.log(error);
 }
 
+/**
+ * Parses the file name from the Content-Disposition header tag
+ * @param response The file download response.
+ */
 function getFileNameFromHeader(response){
   var regexp = /.*?\'\'(.*)/i;
 
