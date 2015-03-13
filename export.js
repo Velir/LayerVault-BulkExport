@@ -318,7 +318,7 @@ function writeFeedback(feedbackNode, filePath, index, depth){
     '*' + feedbackNode.created_at + '* - ' +
     feedbackNode.message + '\n';
 
-  fs.appendFile(filePath, comment);
+  fs.appendFileSync(filePath, comment);
 
   feedbackNode.links.replies.forEach(function(r, i){
     if(treeObjects["feedback_items"].nodes[r]){
@@ -363,7 +363,7 @@ function fetchNextLevel(token, currentLevelNodes, childLevelKey, childKeyAlias){
 
   var chunkPromises = _.chunk(allChildren, maxIdsPerRequest).map(function(ids){
     var childIds = ids.join(',');
-    console.log("Fetching " + childLevelKey + ": " + childIds);
+    console.log("Fetching " + childLevelKey);
 
     return get(token, childLevelKey + '/${ids}', {'ids': childIds});
   });
@@ -407,7 +407,7 @@ function fetchUsers(token, feedbackNodes){
 
   var chunkPromises = _.chunk(allUserIds, maxIdsPerRequest).map(function(ids){
     var userIds = ids.join(',');
-    console.log("Fetching Users: " + userIds);
+    console.log("Fetching Users");
 
     return get(token, 'users/${ids}', {'ids': userIds});
   });
