@@ -74,7 +74,6 @@ var apiConfig = {
   "files": {
     endPoint: "/api/v2/files/${ids}",
     children: [
-      { type: "revision_clusters", get: function(file) { return file.links.revision_clusters; } },
       { type: "revisions", get: function(file) { return file.links.revisions; } }
     ],
     processNode: function(node, filePath){
@@ -84,22 +83,13 @@ var apiConfig = {
       return newPath;
     }
   },
-  "revision_clusters": {
-    endPoint: "/api/v2/revision_clusters/${ids}",
-    children: [
-      { type: "revisions", get: function(cluster) { return cluster.links.revisions; } }
-    ],
-    processNode: function(node, filePath){
-      // No need to create a new folder for clusters
-      return filePath;
-    }
-  },
   "revisions": {
     endPoint: "/api/v2/revisions/${ids}",
     children: [
       { type: "previews", get: function(revision) { return revision.links.previews; } }
     ],
     processNode: function(node, filePath){
+
       var newPath = filePath + '/revision-' + node.revision_number;
       mkdirp.sync(newPath);
       fs.writeFileSync(newPath + '/meta.json', JSON.stringify(node, null, 2));
@@ -397,11 +387,18 @@ function writeFeedback(feedbackNode, filePath, index, depth){
 
   var user = treeObjects['users'][feedbackNode.links.user];
 
+  var indent = Array(depth + 1).join('\t');
+
+  // Need to fix indents on comments with new lines. Prepend indents when we see a newline
+  var indentedComment = feedbackNode.message.replace(/(\r\n|\n|\r)/gm, "\n" + indent);
+
+
+
   var comment =
-  Array(depth + 1).join('  ') + (index + 1) + '. ' +
+  indent + (index + 1) + '. ' +
   '**' + user.first_name + " " + user.last_name + ' (' + user.email + ')**: ' +
   '*' + feedbackNode.created_at + '* - ' +
-  feedbackNode.message + '\n';
+  indentedComment + '\n\n';
 
   fs.appendFileSync(filePath, comment);
 
