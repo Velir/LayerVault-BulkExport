@@ -11,11 +11,12 @@ var apiHost = 'api.layervault.com',
     mkdirp = require('mkdirp'),
     _ = require('lodash'),
     strftime = require('strftime'),
-    request = require('request'),
+    request = require('requestretry'),
     folderName = strftime('%Y%m%d-%H%M%S'),
     startFolder = 'out/' + folderName,
     maxIdsPerRequest = 400,
-    testingLimit;
+    testingLimit,
+    maxConcurrentRequests = 10;
 
 if(args.length < 4){
   console.log('You forgot to include your LayerVault Username, password, Client ID and Secret');
@@ -141,21 +142,8 @@ authenticate(args[0], args[1], args[2], args[3])
           postProcessNode: function(n, p){
 
             // *** download the file here!
-            var requestOptions = {
-              url: n["download_url"],
-              headers: {
-                'Authorization': 'Bearer ' + token.token['access_token']
-              }
-            };
-            var r = request(requestOptions);
-            r.on('response',  function (res) {
-              if(res.headers['status'] === '404 Not Found'){
-                console.log("Not Found: " + n["download_url"]);
-                return;
-              }
-              var fileName = getFileNameFromHeader(res);
-              res.pipe(fs.createWriteStream(p + '/' + fileName));
-            });
+            requestAndSaveFile(n["download_url"], p);
+
           }
         };
 
@@ -189,22 +177,7 @@ authenticate(args[0], args[1], args[2], args[3])
             }
 
             // *** download the preview here!
-            var requestOptions = {
-              url: n["url"],
-              headers: {
-                'Authorization': 'Bearer ' + token.token['access_token']
-              }
-            };
-
-            var r = request(requestOptions);
-            r.on('response',  function (res) {
-              if(res.headers['status'] === '404 Not Found'){
-                console.log("Not Found: " + n["url"]);
-                return;
-              }
-              var fileName = "preview.png";
-              res.pipe(fs.createWriteStream(p + '/' + fileName));
-            });
+            requestAndSaveFile(n["url"], p, "preview.png");
           }
         };
 
@@ -423,6 +396,70 @@ function fetchUsers(token, feedbackNodes){
   .catch(handleError);
 
   return deferred.promise;
+}
+
+var requestQueue = [],
+    currentRequests = 0;
+
+function requestAndSaveFile(url, saveLocation, fileName){
+
+  requestQueue.push({
+    url: url,
+    path: saveLocation,
+    fileName: fileName
+  });
+
+  processFileRequestQueue();
+
+}
+
+function processFileRequestQueue(){
+
+  if(currentRequests >= maxConcurrentRequests || requestQueue.length === 0){
+    return;
+  }
+
+  // Kick off a new request
+  currentRequests++;
+
+  var asset = requestQueue.pop();
+
+  var requestOptions = {
+    url: asset.url,
+    headers: {
+      'Authorization': 'Bearer ' + token.token['access_token']
+    },
+    maxAttempts: 5,
+    retryDelay: 1000
+  };
+
+  try{
+    console.log("Requesting File: " + asset.url);
+    var r = request(requestOptions);
+    r.on('response',  function (res) {
+
+      currentRequests--;
+      processFileRequestQueue();
+
+      if(res.headers['status'] === '404 Not Found'){
+        console.log("Not Found: " + asset.url);
+        return;
+      }
+
+      console.log("File received: " + asset.url);
+
+      var fileName = asset.fileName || getFileNameFromHeader(res);
+      res.pipe(fs.createWriteStream(asset.path + '/' + fileName));
+
+    });
+  }
+  catch(err){
+    currentRequests--;
+    processFileRequestQueue();
+    console.log("Error fetching preview", err);
+  }
+
+  processFileRequestQueue();
 }
 
 /**

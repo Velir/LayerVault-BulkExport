@@ -25,6 +25,7 @@
     "node-rest-client": "^1.4.4",
     "q": "^1.2.0",
     "request": "^2.53.0",
+    "requestretry": "^1.2.2",
     "simple-oauth2": "^0.2.1",
     "strftime": "^0.8.4"
   }
